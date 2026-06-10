@@ -7,11 +7,30 @@ const cors = require("cors");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// PostgreSQL connection (Railway provee DATABASE_URL automáticamente)
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
-});
+// ── Conexión robusta a PostgreSQL ──────────────────────────
+// Usa DATABASE_URL si existe y NO apunta a localhost.
+// Si no resuelve bien, arma la conexión con variables PG* individuales.
+const url = process.env.DATABASE_URL || "";
+const hasValidUrl = url && !url.includes("localhost") && !url.includes("127.0.0.1");
+
+const pool = new Pool(
+  hasValidUrl
+    ? {
+        connectionString: url,
+        ssl: { rejectUnauthorized: false },
+      }
+    : {
+        host: process.env.PGHOST,
+        port: process.env.PGPORT || 5432,
+        user: process.env.PGUSER,
+        password: process.env.PGPASSWORD,
+        database: process.env.PGDATABASE,
+        ssl: { rejectUnauthorized: false },
+      }
+);
+
+console.log("🔌 Método de conexión:", hasValidUrl ? "DATABASE_URL" : "variables PG*");
+console.log("🔌 Host objetivo:", hasValidUrl ? "(definido en URL)" : (process.env.PGHOST || "❌ PGHOST no definido"));
 
 // Crear tabla si no existe
 const initDB = async () => {
@@ -43,12 +62,13 @@ app.use(express.static(path.join(__dirname, "client/build")));
 
 // ── API ROUTES ──────────────────────────────────────────────
 
+// Healthcheck simple
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+
 // GET todos los registros
 app.get("/api/records", async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT * FROM registros ORDER BY fecha ASC"
-    );
+    const result = await pool.query("SELECT * FROM registros ORDER BY fecha ASC");
     res.json(result.rows);
   } catch (err) {
     console.error(err);
@@ -100,8 +120,16 @@ app.get("*", (req, res) => {
 
 // ────────────────────────────────────────────────────────────
 
-initDB().then(() => {
-  app.listen(PORT, () => {
-    console.log(`🌵 MDL Bienestar corriendo en puerto ${PORT}`);
+initDB()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`🌵 MDL Bienestar corriendo en puerto ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("❌ Error al inicializar la base de datos:", err.message);
+    // Arranca el servidor de todas formas para no quedar en crash-loop
+    app.listen(PORT, () => {
+      console.log(`⚠️ Servidor arriba en puerto ${PORT} SIN base de datos`);
+    });
   });
-});
